@@ -1,0 +1,120 @@
+{
+  "model_name": "nous-hermes-2-mistral-7b-dpo.Q4_0.gguf",
+  "model_path": "models/nous-hermes-2-mistral-7b-dpo.Q4_0.gguf",
+  "model_type": "mistral",
+  "model_variant": "nous-hermes-2-dpo",
+  "model_size": "7B",
+  "quantization": "Q4_0",
+  "training_type": "DPO",
+  "optimized_for": "instruction_following",
+  
+  "_comment_generation_params": "Generation parameters optimized for Nous Hermes 2 DPO model",
+  "max_tokens": 4096,
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "top_k": 50,
+  "repeat_penalty": 1.05,
+  "repeat_last_n": 128,
+  
+  "_comment_context": "Context and memory settings",
+  "context_length": 8192,
+  "batch_size": 8,
+  "threads": 4,
+  
+  "_comment_legal_specific": "Legal domain specific settings",
+  "legal_mode": true,
+  "formal_tone": true,
+  "citation_aware": true,
+  
+  "_comment_performance": "Performance and caching settings",
+  "cache_enabled": true,
+  "cache_dir": "backend/local_llm/cache",
+  "cache_max_size_mb": 500,
+  "preload_model": true,
+  
+  "_comment_logging": "Logging and monitoring",
+  "log_level": "INFO",
+  "log_generations": true,
+  "log_performance": true,
+  
+  "_comment_system_prompts": "ChatML format system prompts optimized for Nous Hermes 2",
+  "system_prompts": {
+    "researcher": "<|im_start|>system\nYou are an expert legal research assistant. Analyze legal questions thoroughly, cite relevant case law and statutes, and provide comprehensive research findings. Always maintain accuracy and objectivity in your legal analysis.<|im_end|>",
+    
+    "drafter": "<|im_start|>system\nYou are a professional legal document drafter. Create clear, well-structured legal documents with proper formatting and legal terminology. Ensure all arguments are logically organized and legally sound.<|im_end|>",
+    
+    "summarizer": "<|im_start|>system\nYou are a legal document summarizer. Extract key legal points, arguments, and conclusions into concise, accurate summaries while preserving essential legal meaning and context.<|im_end|>",
+    
+    "default": "<|im_start|>system\nYou are AutoLawyer, an AI legal assistant powered by Nous Hermes 2. Provide helpful, accurate legal information while maintaining professional standards. Always remind users to consult qualified attorneys for specific legal advice.<|im_end|>"
+  },
+  
+  "_comment_legal_templates": "Legal document formatting preferences",
+  "formatting": {
+    "citation_style": "bluebook",
+    "heading_style": "numbered",
+    "paragraph_numbering": true,
+    "page_numbering": true,
+    "double_spacing": false,
+    "font_preference": "Times New Roman",
+    "margin_size": "1 inch"
+  },
+  
+  "_comment_safety": "Safety and compliance settings",
+  "safety": {
+    "ethical_guidelines": true,
+    "conflict_check": true,
+    "confidentiality_reminder": true,
+    "disclaimer_required": true,
+    "max_generation_time_seconds": 300
+  },
+  
+  "_comment_advanced": "Advanced model settings - modify with caution",
+  "advanced": {
+    "seed": -1,
+    "mirostat": 0,
+    "mirostat_tau": 5.0,
+    "mirostat_eta": 0.1,
+    "penalize_nl": true,
+    "numa": false
+  },
+  
+  "_comment_agents": "Agent-specific overrides optimized for Nous Hermes 2 DPO",
+  "agent_overrides": {
+    "researcher": {
+      "temperature": 0.1,
+      "max_tokens": 3072,
+      "top_p": 0.95,
+      "repeat_penalty": 1.02
+    },
+    "drafter": {
+      "temperature": 0.3,
+      "max_tokens": 4096,
+      "top_p": 0.9,
+      "repeat_penalty": 1.05
+    },
+    "summarizer": {
+      "temperature": 0.05,
+      "max_tokens": 1024,
+      "top_p": 0.95,
+      "repeat_penalty": 1.01
+    }
+  },
+  
+  "_comment_backup": "Backup model configuration",
+  "fallback_models": [
+    {
+      "name": "orca-mini-3b.Q4_0.gguf",
+      "path": "models/orca-mini-3b.Q4_0.gguf",
+      "use_if_primary_fails": true
+    }
+  ],
+  
+  "_comment_metadata": "Configuration metadata",
+  "metadata": {
+    "version": "1.0.0",
+    "created_date": "2025-06-11",
+    "last_modified": "2025-06-11",
+    "description": "AutoLawyer GPT4All configuration for Nous Hermes 2 Mistral DPO model - optimized for legal document generation with superior instruction following",
+    "author": "AutoLawyer Development Team"
+  }
+}
