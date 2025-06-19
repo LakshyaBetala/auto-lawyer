@@ -372,3 +372,246 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     """Hash a password"""
     return pwd_context.hash(password)
+# Include routers
+app.include_router(users.router, prefix="/api/v1/users", tags=["users"])
+app.include_router(briefs.router, prefix="/api/v1/briefs", tags=["briefs"])
+app.include_router(agents.router, prefix="/api/v1/agents", tags=["agents"])
+
+# Root and health endpoints
+@app.get("/", include_in_schema=False)
+async def root():
+    """Root endpoint - redirect to docs"""
+    return RedirectResponse(url="/docs" if settings.DEBUG else "/health")
+
+@app.get("/health", response_model=schemas.HealthCheckResponse, tags=["system"])
+async def health_check():
+    """System health check endpoint"""
+    try:
+        # Check database
+        db_status = "ok"
+        try:
+            with SessionLocal() as db:
+                db.execute(text("SELECT 1")).scalar()
+        except Exception:
+            db_status = "error"
+        
+        # Check LLM manager
+        llm_status = "ok" if (llm_manager and llm_manager.has_active_models()) else "no_models"
+        if not llm_manager:
+            llm_status = "error"
+        
+        overall_status = "ok" if (db_status == "ok" and llm_status in ["ok", "no_models"]) else "error"
+        
+        return schemas.HealthCheckResponse(
+            status=overall_status,
+            database=db_status,
+            local_llm=llm_status,
+            timestamp=datetime.now(),
+            version="1.0.0"
+        )
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return schemas.HealthCheckResponse(
+            status="error",
+            database="unknown",
+            local_llm="unknown",
+            timestamp=datetime.now(),
+            version="1.0.0"
+        )
+
+@app.post("/api/v1/auth/login", response_model=Dict[str, Any], tags=["authentication"])
+async def login(user_credentials: schemas.UserLogin, db: SessionLocal = Depends(get_db)):
+    """User login endpoint"""
+    try:
+        # Find user
+        user = db.query(User).filter(User.username == user_credentials.username).first()
+        if not user or not verify_password(user_credentials.password, user.hashed_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password"
+            )
+        
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive"
+            )
+        
+        # Create access token
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": user.username, "user_id": user.id, "is_admin": user.is_admin},
+            expires_delta=access_token_expires
+        )
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "full_name": user.full_name,
+                "is_admin": user.is_admin
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error during login"
+        )
+
+@app.get("/api/v1/system/info", tags=["system"])
+async def system_info(current_user: User = Depends(get_current_admin_user)):
+    """Get system information (admin only)"""
+    try:
+        with SessionLocal() as db:
+            # Count statistics
+            total_users = db.query(User).count()
+            total_briefs = db.query(Brief).count()
+            active_models = db.query(ModelConfig).filter(ModelConfig.is_active == True).count()
+        
+        # LLM manager info
+        llm_info = {}
+        if llm_manager:
+            llm_info = {
+                "loaded_models": list(llm_manager.get_loaded_models().keys()),
+                "total_models": len(llm_manager.get_loaded_models()),
+                "memory_usage": llm_manager.get_memory_usage() if hasattr(llm_manager, 'get_memory_usage') else "unknown"
+            }
+        
+        return {
+            "version": "1.0.0",
+            "environment": settings.ENVIRONMENT,
+            "debug_mode": settings.DEBUG,
+            "statistics": {
+                "total_users": total_users,
+                "total_briefs": total_briefs,
+                "active_models": active_models
+            },
+            "llm_manager": llm_info,
+            "uptime_seconds": (datetime.now() - datetime.now()).total_seconds()  # This would be tracked properly in production
+        }
+        
+    except Exception as e:
+        logger.error(f"System info error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve system information"
+        )
+
+# Error handlers
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc: HTTPException):
+    """Handle HTTP exceptions"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": exc.detail,
+            "code": exc.status_code,
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+@app.exception_handler(SQLAlchemyError)
+async def database_exception_handler(request, exc: SQLAlchemyError):
+    """Handle database exceptions"""
+    logger.error(f"Database error: {str(exc)}")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Database error occurred",
+            "detail": "Please try again later",
+            "code": "DATABASE_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request, exc: Exception):
+    """Handle general exceptions"""
+    logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "error": "Internal server error",
+            "detail": "An unexpected error occurred",
+            "code": "INTERNAL_ERROR",
+            "timestamp": datetime.now().isoformat()
+        }
+    )
+
+# Development endpoints (only available in debug mode)
+if settings.DEBUG:
+    @app.get("/api/v1/dev/reset-db", tags=["development"])
+    async def reset_database(current_user: User = Depends(get_current_admin_user)):
+        """Reset database (development only)"""
+        try:
+            # Drop and recreate all tables
+            Base.metadata.drop_all(bind=engine)
+            Base.metadata.create_all(bind=engine)
+            
+            # Reinitialize default data
+            await create_default_admin()
+            await init_default_models()
+            
+            return {"message": "Database reset successfully"}
+            
+        except Exception as e:
+            logger.error(f"Database reset error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to reset database"
+            )
+    
+    @app.get("/api/v1/dev/logs", tags=["development"])
+    async def get_logs(current_user: User = Depends(get_current_admin_user), lines: int = 100):
+        """Get application logs (development only)"""
+        try:
+            log_file = Path("autolawyer.log")
+            if not log_file.exists():
+                return {"logs": [], "message": "No log file found"}
+            
+            with open(log_file, 'r') as f:
+                all_lines = f.readlines()
+                recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+            
+            return {
+                "logs": [line.strip() for line in recent_lines],
+                "total_lines": len(all_lines),
+                "returned_lines": len(recent_lines)
+            }
+            
+        except Exception as e:
+            logger.error(f"Get logs error: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve logs"
+            )
+
+# Application entry point
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Configuration based on environment
+    config = {
+        "app": "main:app",
+        "host": settings.HOST,
+        "port": settings.PORT,
+        "reload": settings.DEBUG,
+        "log_level": "info" if not settings.DEBUG else "debug",
+        "access_log": True,
+        "workers": 1,  # Single worker for local LLM to avoid memory issues
+    }
+    
+    logger.info(f"🚀 Starting AutoLawyer on {settings.HOST}:{settings.PORT}")
+    logger.info(f"📊 Environment: {settings.ENVIRONMENT}")
+    logger.info(f"🔧 Debug mode: {settings.DEBUG}")
+    
+    uvicorn.run(**config)
