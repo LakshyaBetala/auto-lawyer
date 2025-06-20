@@ -865,4 +865,334 @@ async def export_brief(
         elif format in ['markdown', 'md']:
             content = f"# {export_data['title']}\n\n"
             if export_data['description']:
-                content += f"**Description:** {export_data['description']}\n\
+                content += f"**Description:** {export_data['description']}\n\n"
+            
+            content += f"**Case Type:** {export_data['case_type'] or 'N/A'}\n"
+            content += f"**Jurisdiction:** {export_data['jurisdiction'] or 'N/A'}\n"
+            content += f"**Court Level:** {export_data['court_level'] or 'N/A'}\n"
+            content += f"**Status:** {export_data['status']}\n"
+            content += f"**Word Count:** {export_data['word_count']}\n\n"
+            
+            content += "## Brief Content\n\n"
+            content += export_data['content'] or "No content available"
+            
+            if include_research and 'research_results' in export_data:
+                content += "\n\n## Research Results\n\n"
+                for i, result in enumerate(export_data['research_results'], 1):
+                    content += f"### {i}. {result['title'] or 'Untitled Research'}\n\n"
+                    content += f"**Citation:** {result['citation'] or 'N/A'}\n"
+                    content += f"**Relevance Score:** {result['relevance_score'] or 'N/A'}/10\n"
+                    if result['summary']:
+                        content += f"**Summary:** {result['summary']}\n"
+                    content += "\n---\n\n"
+            
+            from fastapi.responses import Response
+            return Response(
+                content=content,
+                media_type="text/markdown",
+                headers={"Content-Disposition": f"attachment; filename=brief_{brief_id}.md"}
+            )
+            
+        else:  # txt format
+            content = f"LEGAL BRIEF: {export_data['title']}\n"
+            content += "=" * (len(export_data['title']) + 14) + "\n\n"
+            
+            if export_data['description']:
+                content += f"Description: {export_data['description']}\n"
+            
+            content += f"Case Type: {export_data['case_type'] or 'N/A'}\n"
+            content += f"Jurisdiction: {export_data['jurisdiction'] or 'N/A'}\n"
+            content += f"Court Level: {export_data['court_level'] or 'N/A'}\n"
+            content += f"Status: {export_data['status']}\n"
+            content += f"Word Count: {export_data['word_count']}\n"
+            content += f"Created: {export_data['created_at']}\n\n"
+            
+            content += "CONTENT:\n"
+            content += "-" * 50 + "\n"
+            content += export_data['content'] or "No content available"
+            
+            if include_research and 'research_results' in export_data:
+                content += "\n\n" + "=" * 50 + "\n"
+                content += "RESEARCH RESULTS:\n"
+                content += "=" * 50 + "\n\n"
+                
+                for i, result in enumerate(export_data['research_results'], 1):
+                    content += f"{i}. {result['title'] or 'Untitled Research'}\n"
+                    content += f"   Citation: {result['citation'] or 'N/A'}\n"
+                    content += f"   Relevance: {result['relevance_score'] or 'N/A'}/10\n"
+                    if result['summary']:
+                        content += f"   Summary: {result['summary']}\n"
+                    content += "\n" + "-" * 30 + "\n\n"
+            
+            from fastapi.responses import Response
+            return Response(
+                content=content,
+                media_type="text/plain",
+                headers={"Content-Disposition": f"attachment; filename=brief_{brief_id}.txt"}
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Export brief error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to export brief"
+        )
+
+# Advanced search endpoint
+@router.post("/search", response_model=List[schemas.BriefSummary])
+async def advanced_brief_search(
+    search_request: schemas.BriefSearchRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Advanced search for briefs with multiple criteria
+    """
+    try:
+        # Build base query
+        query = db.query(Brief).filter(Brief.owner_id == current_user.id)
+        
+        # Apply filters from search request
+        if search_request.query:
+            search_term = f"%{search_request.query}%"
+            query = query.filter(
+                or_(
+                    Brief.title.ilike(search_term),
+                    Brief.description.ilike(search_term),
+                    Brief.content.ilike(search_term),
+                    Brief.research_notes.ilike(search_term)
+                )
+            )
+        
+        if search_request.case_type:
+            query = query.filter(Brief.case_type.ilike(f"%{search_request.case_type}%"))
+        
+        if search_request.status:
+            query = query.filter(Brief.status == search_request.status)
+        
+        if search_request.jurisdiction:
+            query = query.filter(Brief.jurisdiction.ilike(f"%{search_request.jurisdiction}%"))
+        
+        if search_request.date_from:
+            query = query.filter(Brief.created_at >= search_request.date_from)
+        
+        if search_request.date_to:
+            query = query.filter(Brief.created_at <= search_request.date_to)
+        
+        if search_request.owner_id and current_user.is_admin:
+            # Only admins can search other users' briefs
+            query = query.filter(Brief.owner_id == search_request.owner_id)
+        
+        # Execute query with pagination
+        briefs = query.order_by(desc(Brief.updated_at)).offset(search_request.offset).limit(search_request.limit).all()
+        
+        # Convert to summary format
+        brief_summaries = []
+        for brief in briefs:
+            brief_summaries.append(schemas.BriefSummary(
+                id=brief.id,
+                title=brief.title,
+                case_type=brief.case_type,
+                status=brief.status,
+                word_count=brief.word_count,
+                created_at=brief.created_at,
+                updated_at=brief.updated_at
+            ))
+        
+        return brief_summaries
+        
+    except Exception as e:
+        logger.error(f"Advanced search error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to perform advanced search"
+        )
+
+# Bulk operations
+@router.post("/bulk/update-status")
+async def bulk_update_status(
+    brief_ids: List[int],
+    new_status: schemas.BriefStatusEnum,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update status for multiple briefs
+    """
+    try:
+        # Validate all briefs belong to current user
+        briefs = db.query(Brief).filter(
+            and_(
+                Brief.id.in_(brief_ids),
+                Brief.owner_id == current_user.id
+            )
+        ).all()
+        
+        if len(briefs) != len(brief_ids):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Some briefs not found or access denied"
+            )
+        
+        # Update all briefs
+        updated_count = 0
+        for brief in briefs:
+            brief.status = new_status
+            brief.updated_at = datetime.now()
+            updated_count += 1
+        
+        db.commit()
+        
+        logger.info(f"Bulk updated {updated_count} briefs to status {new_status.value}")
+        
+        return {
+            "message": f"Successfully updated {updated_count} briefs",
+            "updated_count": updated_count,
+            "new_status": new_status.value
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk update error: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to perform bulk update"
+        )
+
+@router.delete("/bulk/archive")
+async def bulk_archive_briefs(
+    brief_ids: List[int],
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Archive multiple briefs
+    """
+    try:
+        # Validate all briefs belong to current user
+        briefs = db.query(Brief).filter(
+            and_(
+                Brief.id.in_(brief_ids),
+                Brief.owner_id == current_user.id
+            )
+        ).all()
+        
+        if len(briefs) != len(brief_ids):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Some briefs not found or access denied"
+            )
+        
+        # Archive all briefs
+        archived_count = 0
+        for brief in briefs:
+            brief.status = BriefStatus.ARCHIVED
+            brief.updated_at = datetime.now()
+            archived_count += 1
+        
+        db.commit()
+        
+        logger.info(f"Bulk archived {archived_count} briefs")
+        
+        return {
+            "message": f"Successfully archived {archived_count} briefs",
+            "archived_count": archived_count
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk archive error: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to perform bulk archive"
+        )
+
+# Template and collaboration features
+@router.post("/{brief_id}/duplicate", response_model=schemas.BriefResponse)
+async def duplicate_brief(
+    brief_id: int,
+    new_title: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create a duplicate of an existing brief
+    """
+    try:
+        # Get original brief
+        original_brief = db.query(Brief).filter(
+            and_(Brief.id == brief_id, Brief.owner_id == current_user.id)
+        ).first()
+        
+        if not original_brief:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Brief not found"
+            )
+        
+        # Create duplicate
+        duplicate_title = new_title or f"Copy of {original_brief.title}"
+        
+        duplicate_brief = Brief(
+            title=duplicate_title,
+            description=original_brief.description,
+            case_type=original_brief.case_type,
+            jurisdiction=original_brief.jurisdiction,
+            court_level=original_brief.court_level,
+            content=original_brief.content,
+            research_notes=original_brief.research_notes,
+            citations=original_brief.citations,
+            status=BriefStatus.DRAFT,
+            owner_id=current_user.id,
+            word_count=original_brief.word_count,
+            page_count=original_brief.page_count
+        )
+        
+        db.add(duplicate_brief)
+        db.commit()
+        db.refresh(duplicate_brief)
+        
+        # Copy research results
+        original_research = db.query(ResearchResult).filter(
+            ResearchResult.brief_id == brief_id
+        ).all()
+        
+        for research in original_research:
+            duplicate_research = ResearchResult(
+                brief_id=duplicate_brief.id,
+                query=research.query,
+                source_type=research.source_type,
+                title=research.title,
+                citation=research.citation,
+                court=research.court,
+                year=research.year,
+                summary=research.summary,
+                relevant_excerpt=research.relevant_excerpt,
+                relevance_score=research.relevance_score,
+                agent_notes=research.agent_notes,
+                found_by_agent=research.found_by_agent,
+                verified=research.verified
+            )
+            db.add(duplicate_research)
+        
+        db.commit()
+        
+        logger.info(f"Duplicated brief {brief_id} to {duplicate_brief.id}")
+        
+        return duplicate_brief
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Duplicate brief error: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to duplicate brief"
+        )
