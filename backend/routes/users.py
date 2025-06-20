@@ -939,8 +939,8 @@ async def bulk_activate_users(
 # Account recovery endpoints
 @router.post("/forgot-password")
 async def forgot_password(
-    email: str = Form(...),
     background_tasks: BackgroundTasks,
+    email: str = Form(...),
     db: Session = Depends(get_db)
 ):
     """
